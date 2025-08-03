@@ -1,0 +1,361 @@
+-- REhpoinV1 - DOORS 终极悬浮窗版
+-- 作者：DoxZcn7
+-- 功能：悬浮窗控制 | 物品透视 | 怪物警报 | 无敌穿墙 | 夜视模式
+-- 适配 Delta v3.7+
+
+--====== 服务初始化 ======--
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local TextChatService = game:GetService("TextChatService")
+local Player = Players.LocalPlayer
+
+--====== 核心配置 ======--
+local CONFIG = {
+    ESP = {
+        Items = true,            -- 物品透视
+        Monsters = true,         -- 怪物透视
+        ItemColor = Color3.fromRGB(0, 255, 0),  -- 物品颜色
+        MonsterColor = Color3.fromRGB(255, 50, 50), -- 怪物颜色
+        MaxDistance = 200        -- 透视距离
+    },
+    Alerts = {
+        SoundId = "rbxassetid://9117826679", -- 警报音效
+        ScreenFlash = true,      -- 屏幕闪烁
+        ChatWarning = true       -- 聊天警告
+    },
+    Features = {
+        GodMode = true,          -- 默认无敌
+        NoClip = false,          -- 默认穿墙关闭
+        NightVision = true,      -- 默认夜视
+        SpeedBoost = 25          -- 默认移速
+    }
+}
+
+--====== 悬浮窗系统 ======--
+local GUI = {
+    Main = Instance.new("ScreenGui"),
+    Frame = Instance.new("Frame"),
+    Dragging = false,
+    DragOffset = Vector2.new(0, 0)
+}
+
+local function CreateFloatingWindow()
+    -- 主界面设置
+    GUI.Main.Name = "REhpoinV1_UI"
+    GUI.Main.Parent = CoreGui
+    GUI.Main.ResetOnSpawn = false
+
+    -- 可拖动框架
+    GUI.Frame.Name = "MainFrame"
+    GUI.Frame.Size = UDim2.new(0, 320, 0, 400)
+    GUI.Frame.Position = UDim2.new(0.1, 0, 0.1, 0)
+    GUI.Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    GUI.Frame.BorderSizePixel = 0
+    GUI.Frame.Active = true
+    GUI.Frame.Selectable = true
+    GUI.Frame.Parent = GUI.Main
+
+    -- 标题栏（可拖动区域）
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 30)
+    titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    titleBar.Parent = GUI.Frame
+
+    local titleText = Instance.new("TextLabel")
+    titleText.Text = "REhpoinV1 控制面板"
+    titleText.Size = UDim2.new(1, 0, 1, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.TextColor3 = Color3.new(1, 1, 1)
+    titleText.Font = Enum.Font.GothamBold
+    titleText.TextSize = 14
+    titleText.Parent = titleBar
+
+    -- 拖动功能
+    titleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            GUI.Dragging = true
+            GUI.DragOffset = Vector2.new(input.Position.X, input.Position.Y) - GUI.Frame.AbsolutePosition
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if GUI.Dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            GUI.Frame.Position = UDim2.new(
+                0, input.Position.X - GUI.DragOffset.X,
+                0, input.Position.Y - GUI.DragOffset.Y
+            )
+        end
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            GUI.Dragging = false
+        end
+    end)
+
+    -- 控制按钮容器
+    local buttonContainer = Instance.new("ScrollingFrame")
+    buttonContainer.Name = "ButtonContainer"
+    buttonContainer.Size = UDim2.new(1, -10, 1, -40)
+    buttonContainer.Position = UDim2.new(0, 5, 0, 35)
+    buttonContainer.BackgroundTransparency = 1
+    buttonContainer.ScrollBarThickness = 5
+    buttonContainer.Parent = GUI.Frame
+
+    -- 关闭按钮
+    local closeButton = Instance.new("TextButton")
+    closeButton.Text = "X"
+    closeButton.Size = UDim2.new(0, 25, 0, 25)
+    closeButton.Position = UDim2.new(1, -30, 0, 5)
+    closeButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    closeButton.TextColor3 = Color3.new(1, 1, 1)
+    closeButton.Parent = GUI.Frame
+    closeButton.MouseButton1Click:Connect(function()
+        GUI.Main:Destroy()
+    end)
+
+    return buttonContainer
+end
+
+--====== 透视系统 ======--
+local ESP = {
+    Handlers = {},
+    ActiveMonsters = {}
+}
+
+local function CreateESP(target, color)
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = color
+    highlight.OutlineColor = color
+    highlight.FillTransparency = 0.5
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent = target
+    table.insert(ESP.Handlers, highlight)
+end
+
+local function ClearESP()
+    for _, handler in ipairs(ESP.Handlers) do
+        handler:Destroy()
+    end
+    ESP.Handlers = {}
+end
+
+local function UpdateESP()
+    ClearESP()
+    
+    -- 物品透视
+    if CONFIG.ESP.Items then
+        for _, item in ipairs(Workspace:GetDescendants()) do
+            if (item.Name == "KeyObtain" or item:FindFirstChild("Tool")) and item:IsA("BasePart") then
+                local distance = (Player.Character.HumanoidRootPart.Position - item.Position).Magnitude
+                if distance <= CONFIG.ESP.MaxDistance then
+                    CreateESP(item, CONFIG.ESP.ItemColor)
+                end
+            end
+        end
+    end
+
+    -- 怪物透视
+    if CONFIG.ESP.Monsters then
+        for name, monster in pairs(Workspace:GetChildren()) do
+            if monster:FindFirstChild("HumanoidRootPart") then
+                if name == "Rush" or name == "Ambush" or name == "Seek" then
+                    CreateESP(monster, CONFIG.ESP.MonsterColor)
+                    ESP.ActiveMonsters[name] = monster
+                    
+                    -- 怪物警报
+                    if CONFIG.Alerts.ChatWarning then
+                        TextChatService:DisplaySystemMessage(name.." 已出现！")
+                    end
+                    if CONFIG.Alerts.Sound then
+                        local sound = Instance.new("Sound")
+                        sound.SoundId = CONFIG.Alerts.SoundId
+                        sound.Parent = monster
+                        sound:Play()
+                    end
+                end
+            else
+                ESP.ActiveMonsters[name] = nil
+            end
+        end
+    end
+end
+
+--====== 玩家功能 ======--
+local function ToggleGodMode(state)
+    CONFIG.Features.GodMode = state
+    if Player.Character then
+        local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.MaxHealth = state and math.huge or 100
+            humanoid.Health = state and math.huge or 100
+        end
+    end
+end
+
+local function ToggleNoClip(state)
+    CONFIG.Features.NoClip = state
+    if state then
+        RunService.Stepped:Connect(function()
+            if Player.Character then
+                for _, part in ipairs(Player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local function ToggleNightVision(state)
+    CONFIG.Features.NightVision = state
+    Lighting.Brightness = state and 2 or 1
+    Lighting.OutdoorAmbient = state and Color3.new(1, 1, 1) or Color3.new(0.5, 0.5, 0.5)
+end
+
+local function SetSpeed(value)
+    CONFIG.Features.SpeedBoost = value
+    if Player.Character then
+        local humanoid = Player.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.WalkSpeed = value
+        end
+    end
+end
+
+--====== 控制界面 ======--
+local function CreateControlButtons(container)
+    local buttonY = 5
+    local buttonHeight = 30
+    local spacing = 5
+
+    -- 透视开关
+    local espButton = Instance.new("TextButton")
+    espButton.Text = "物品透视: " .. (CONFIG.ESP.Items and "ON" or "OFF")
+    espButton.Size = UDim2.new(1, -10, 0, buttonHeight)
+    espButton.Position = UDim2.new(0, 5, 0, buttonY)
+    espButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    espButton.TextColor3 = Color3.new(1, 1, 1)
+    espButton.Parent = container
+    espButton.MouseButton1Click:Connect(function()
+        CONFIG.ESP.Items = not CONFIG.ESP.Items
+        espButton.Text = "物品透视: " .. (CONFIG.ESP.Items and "ON" or "OFF")
+        UpdateESP()
+    end)
+    buttonY = buttonY + buttonHeight + spacing
+
+    -- 怪物透视
+    local monsterEspButton = Instance.new("TextButton")
+    monsterEspButton.Text = "怪物透视: " .. (CONFIG.ESP.Monsters and "ON" or "OFF")
+    monsterEspButton.Size = UDim2.new(1, -10, 0, buttonHeight)
+    monsterEspButton.Position = UDim2.new(0, 5, 0, buttonY)
+    monsterEspButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    monsterEspButton.TextColor3 = Color3.new(1, 1, 1)
+    monsterEspButton.Parent = container
+    monsterEspButton.MouseButton1Click:Connect(function()
+        CONFIG.ESP.Monsters = not CONFIG.ESP.Monsters
+        monsterEspButton.Text = "怪物透视: " .. (CONFIG.ESP.Monsters and "ON" or "OFF")
+        UpdateESP()
+    end)
+    buttonY = buttonY + buttonHeight + spacing
+
+    -- 无敌模式
+    local godModeButton = Instance.new("TextButton")
+    godModeButton.Text = "无敌模式: " .. (CONFIG.Features.GodMode and "ON" or "OFF")
+    godModeButton.Size = UDim2.new(1, -10, 0, buttonHeight)
+    godModeButton.Position = UDim2.new(0, 5, 0, buttonY)
+    godModeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    godModeButton.TextColor3 = Color3.new(1, 1, 1)
+    godModeButton.Parent = container
+    godModeButton.MouseButton1Click:Connect(function()
+        ToggleGodMode(not CONFIG.Features.GodMode)
+        godModeButton.Text = "无敌模式: " .. (CONFIG.Features.GodMode and "ON" or "OFF")
+    end)
+    buttonY = buttonY + buttonHeight + spacing
+
+    -- 穿墙模式
+    local noClipButton = Instance.new("TextButton")
+    noClipButton.Text = "穿墙模式: " .. (CONFIG.Features.NoClip and "ON" or "OFF")
+    noClipButton.Size = UDim2.new(1, -10, 0, buttonHeight)
+    noClipButton.Position = UDim2.new(0, 5, 0, buttonY)
+    noClipButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    noClipButton.TextColor3 = Color3.new(1, 1, 1)
+    noClipButton.Parent = container
+    noClipButton.MouseButton1Click:Connect(function()
+        ToggleNoClip(not CONFIG.Features.NoClip)
+        noClipButton.Text = "穿墙模式: " .. (CONFIG.Features.NoClip and "ON" or "OFF")
+    end)
+    buttonY = buttonY + buttonHeight + spacing
+
+    -- 夜视模式
+    local nightVisionButton = Instance.new("TextButton")
+    nightVisionButton.Text = "夜视模式: " .. (CONFIG.Features.NightVision and "ON" or "OFF")
+    nightVisionButton.Size = UDim2.new(1, -10, 0, buttonHeight)
+    nightVisionButton.Position = UDim2.new(0, 5, 0, buttonY)
+    nightVisionButton.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    nightVisionButton.TextColor3 = Color3.new(1, 1, 1)
+    nightVisionButton.Parent = container
+    nightVisionButton.MouseButton1Click:Connect(function()
+        ToggleNightVision(not CONFIG.Features.NightVision)
+        nightVisionButton.Text = "夜视模式: " .. (CONFIG.Features.NightVision and "ON" or "OFF")
+    end)
+    buttonY = buttonY + buttonHeight + spacing
+
+    -- 速度调节
+    local speedLabel = Instance.new("TextLabel")
+    speedLabel.Text = "移动速度: " .. CONFIG.Features.SpeedBoost
+    speedLabel.Size = UDim2.new(1, -10, 0, 20)
+    speedLabel.Position = UDim2.new(0, 5, 0, buttonY)
+    speedLabel.BackgroundTransparency = 1
+    speedLabel.TextColor3 = Color3.new(1, 1, 1)
+    speedLabel.Parent = container
+    buttonY = buttonY + 20 + spacing
+
+    local speedSlider = Instance.new("TextBox")
+    speedSlider.Text = tostring(CONFIG.Features.SpeedBoost)
+    speedSlider.Size = UDim2.new(1, -10, 0, 25)
+    speedSlider.Position = UDim2.new(0, 5, 0, buttonY)
+    speedSlider.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    speedSlider.TextColor3 = Color3.new(1, 1, 1)
+    speedSlider.Parent = container
+    speedSlider.FocusLost:Connect(function()
+        local num = tonumber(speedSlider.Text)
+        if num and num >= 16 and num <= 100 then
+            SetSpeed(num)
+            speedLabel.Text = "移动速度: " .. num
+        else
+            speedSlider.Text = tostring(CONFIG.Features.SpeedBoost)
+        end
+    end)
+end
+
+--====== 主流程 ======--
+local function Initialize()
+    -- 创建悬浮窗
+    local buttonContainer = CreateFloatingWindow()
+    CreateControlButtons(buttonContainer)
+    
+    -- 初始化功能
+    ToggleGodMode(CONFIG.Features.GodMode)
+    ToggleNightVision(CONFIG.Features.NightVision)
+    SetSpeed(CONFIG.Features.SpeedBoost)
+    
+    -- 主循环
+    RunService.Heartbeat:Connect(function()
+        UpdateESP()
+    end)
+    
+    warn("REhpoinV1 已完全加载！")
+end
+
+-- 延迟启动防止检测
+task.spawn(function()
+    task.wait(5)
+    Initialize()
+end)
